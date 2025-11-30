@@ -2,10 +2,12 @@ package main
 
 import (
 	"database/sql"
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -54,12 +56,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "cannot read thumbnail data", err)
-		return
-	}
-
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -75,13 +71,39 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(data)
+	exts, err := mime.ExtensionsByType(mediaType)
+	if err != nil || len(exts) == 0 {
+		respondWithError(w, http.StatusBadRequest, "unsupported media type", err)
+		return
+	}
 
-	thumbnailURL := fmt.Sprintf("data:%s;base64,%s", mediaType, encoded)
+	ext := exts[0]
 
+	fileName := videoID.String() + ext
+	filePath := filepath.Join(cfg.assetsRoot, fileName)
+
+	if err := os.MkdirAll(cfg.assetsRoot, 0755); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create assets directory", err)
+		return
+	}
+
+	dst, err := os.Create(filePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not create thumbnail file", err)
+		return
+	}
+
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "could not save thumbnail file", err)
+		return
+	}
+
+	thumbnailURL := fmt.Sprintf("http://localhost:%d/assets/%s", cfg.port, fileName)
 	video.ThumbnailURL = &thumbnailURL
 
-	if err = cfg.db.UpdateVideo(video); err != nil {
+	if err := cfg.db.UpdateVideo(video); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "could not update video", err)
 		return
 	}
