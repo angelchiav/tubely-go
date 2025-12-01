@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -33,79 +35,97 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
-
-	const maxMemory = 10 << 20
-
+	const maxMemory = 10 << 20 // 10 MB
 	if err := r.ParseMultipartForm(maxMemory); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "unable to parse multipart form", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to parse multipart form", err)
 		return
 	}
 
-	file, fileHeader, err := r.FormFile("thumbnail")
+	file, header, err := r.FormFile("thumbnail")
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "unable to parse form file", err)
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
 		return
 	}
-
 	defer file.Close()
 
-	mediaType := fileHeader.Header.Get("Content-Type")
-	if mediaType == "" {
-		respondWithError(w, http.StatusBadRequest, "header cannot be empty", fmt.Errorf("missing Content-Type header"))
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" {
+		respondWithError(w, http.StatusBadRequest, "Missing Content-Type for thumbnail", nil)
+		return
+	}
+
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type header", err)
+		return
+	}
+
+	if mediaType != "image/png" && mediaType != "image/jpeg" {
+		respondWithError(w, http.StatusBadRequest, "Only JPEG and PNG images are allowed as thumbnails", nil)
 		return
 	}
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			respondWithError(w, http.StatusNotFound, "video not found", err)
+			respondWithError(w, http.StatusNotFound, "Video not found", err)
 			return
 		}
-		respondWithError(w, http.StatusInternalServerError, "database error", err)
+		respondWithError(w, http.StatusInternalServerError, "Database error", err)
 		return
 	}
-
-	if userID != video.UserID {
-		respondWithError(w, http.StatusUnauthorized, "Unauthorized", fmt.Errorf("user is not owner of video"))
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized to update this video", nil)
 		return
 	}
 
 	exts, err := mime.ExtensionsByType(mediaType)
 	if err != nil || len(exts) == 0 {
-		respondWithError(w, http.StatusBadRequest, "unsupported media type", err)
+		respondWithError(w, http.StatusBadRequest, "Unsupported media type", err)
+		return
+	}
+	ext := exts[0]
+
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to generate random file name", err)
 		return
 	}
 
-	ext := exts[0]
-
-	fileName := videoID.String() + ext
+	randomString := base64.RawURLEncoding.EncodeToString(randomBytes)
+	fileName := randomString + ext
 	filePath := filepath.Join(cfg.assetsRoot, fileName)
 
 	if err := os.MkdirAll(cfg.assetsRoot, 0755); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "could not create assets directory", err)
+		respondWithError(w, http.StatusInternalServerError, "Could not create assets directory", err)
 		return
 	}
 
 	dst, err := os.Create(filePath)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "could not create thumbnail file", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to create file on server", err)
 		return
 	}
-
 	defer dst.Close()
 
-	if _, err := io.Copy(dst, file); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "could not save thumbnail file", err)
+	if _, err = io.Copy(dst, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
 		return
 	}
 
-	thumbnailURL := fmt.Sprintf("http://localhost:%d/assets/%s", cfg.port, fileName)
+	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, fileName)
+	fmt.Printf("[DEBUG] Setting thumbnail URL to: %s\n", thumbnailURL)
+	fmt.Printf("[DEBUG] File saved to: %s\n", filePath)
 	video.ThumbnailURL = &thumbnailURL
-
-	if err := cfg.db.UpdateVideo(video); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "could not update video", err)
+	if err = cfg.db.UpdateVideo(video); err != nil {
+		fmt.Printf("[DEBUG] Error updating video: %v\n", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
+	}
+
+	updatedVideo, err := cfg.db.GetVideo(videoID)
+	if err == nil {
+		fmt.Printf("[DEBUG] Updated video thumbnail_url: %s\n", *updatedVideo.ThumbnailURL)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)

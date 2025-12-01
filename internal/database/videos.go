@@ -129,7 +129,8 @@ func (c Client) UpdateVideo(video Video) error {
 		description = ?,
 		thumbnail_url = ?,
 		video_url = ?,
-		user_id = ?
+		user_id = ?,
+		updated_at = CURRENT_TIMESTAMP
 	WHERE id = ?
 	`
 
@@ -137,8 +138,8 @@ func (c Client) UpdateVideo(video Video) error {
 		query,
 		video.Title,
 		video.Description,
-		&video.ThumbnailURL,
-		&video.VideoURL,
+		video.ThumbnailURL,
+		video.VideoURL,
 		video.UserID,
 		video.ID,
 	)
