@@ -103,5 +103,20 @@ func prefixForAspectRadio(ar string) string {
 }
 
 func processVideoForFastStart(filePath string) (string, error) {
-	return "", nil
+	outPath := filePath + ".processing"
+	cmd := exec.Command(
+		"ffmpeg", "-i", filePath,
+		"-c", "copy", "-movflags",
+		"faststart", "-f", "mp4",
+		outPath,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffmpeg failed %w: %s", err, stderr.String())
+	}
+
+	return outPath, nil
 }

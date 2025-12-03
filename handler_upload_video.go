@@ -105,17 +105,27 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	prefix := prefixForAspectRadio(aspect)
 
-	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to seek temp file", err)
+	processedPath, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video for fast start", err)
 		return
 	}
+
+	processedFile, err := os.Open(processedPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to open processed video", err)
+		return
+	}
+
+	defer processedFile.Close()
+	defer os.Remove(processedPath)
 
 	key := fmt.Sprintf("%s/%s.mp4", prefix, videoID.String())
 
 	_, err = cfg.s3Client.PutObject(context.Background(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(key),
-		Body:        tmpFile,
+		Body:        processedFile,
 		ContentType: aws.String(mediaType),
 	})
 	if err != nil {
