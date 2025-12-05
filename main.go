@@ -111,8 +111,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	appHandler := http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))
-	mux.Handle("/app/", appHandler)
+	m
 
 	assetsHandler := http.StripPrefix("/assets", http.FileServer(http.Dir(assetsRoot)))
 	mux.Handle("/assets/", noCacheMiddleware(assetsHandler))

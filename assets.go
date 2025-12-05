@@ -1,16 +1,12 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
-	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 func (cfg apiConfig) ensureAssetsDir() error {
@@ -20,9 +16,20 @@ func (cfg apiConfig) ensureAssetsDir() error {
 	return nil
 }
 
-func getAssetPath(videoID uuid.UUID, mediaType string) string {
+func getAssetPath(mediaType string) string {
+	base := make([]byte, 32)
+	_, err := rand.Read(base)
+	if err != nil {
+		panic("failed to generate random bytes")
+	}
+	id := base64.RawURLEncoding.EncodeToString(base)
+
 	ext := mediaTypeToExt(mediaType)
-	return fmt.Sprintf("%s%s", videoID, ext)
+	return fmt.Sprintf("%s%s", id, ext)
+}
+
+func (cfg apiConfig) getObjectURL(key string) string {
+	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
 }
 
 func (cfg apiConfig) getAssetDiskPath(assetPath string) string {
@@ -39,84 +46,4 @@ func mediaTypeToExt(mediaType string) string {
 		return ".bin"
 	}
 	return "." + parts[1]
-}
-
-type ffprobeOutput struct {
-	Streams []struct {
-		Width  int `json:"width"`
-		Height int `json:"height"`
-	} `json:"streams"`
-}
-
-func getVideoAspectRatio(filePath string) (string, error) {
-	cmd := exec.Command(
-		"ffprobe",
-		"-v", "error",
-		"-print_format",
-		"json", "-show_streams",
-		filePath,
-	)
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return "", err
-	}
-
-	var result ffprobeOutput
-	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
-		return "", err
-	}
-
-	if len(result.Streams) == 0 {
-		return "", fmt.Errorf("no video streams found")
-	}
-
-	h := float64(result.Streams[0].Height)
-	w := float64(result.Streams[0].Width)
-	ratio := w / h
-
-	landscape := 16.0 / 9.0
-	portrait := 9.0 / 16.0
-
-	const tol = 0.05
-
-	switch {
-	case math.Abs(ratio-landscape) < tol:
-		return "16:9", nil
-	case math.Abs(ratio-portrait) < tol:
-		return "9:16", nil
-	default:
-		return "other", nil
-	}
-}
-
-func prefixForAspectRadio(ar string) string {
-	switch ar {
-	case "16:9":
-		return "landscape"
-	case "9:16":
-		return "portrait"
-	default:
-		return "other"
-	}
-}
-
-func processVideoForFastStart(filePath string) (string, error) {
-	outPath := filePath + ".processing"
-	cmd := exec.Command(
-		"ffmpeg", "-i", filePath,
-		"-c", "copy", "-movflags",
-		"faststart", "-f", "mp4",
-		outPath,
-	)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ffmpeg failed %w: %s", err, stderr.String())
-	}
-
-	return outPath, nil
 }
